@@ -1,0 +1,20 @@
+# ── Secrets / machine-specific (NEVER commit) ───────────────────────────────
+# WiFi credentials + bridge IP  → see firmware/src/config.h.example
+firmware/src/config.h
+# Private ntfy topic  → see bridge/local_config.example.py
+bridge/local_config.py
+
+# ── Build artifacts ──────────────────────────────────────────────────────────
+firmware/.pio/
+__pycache__/
+*.pyc
+
+# ── Runtime files ────────────────────────────────────────────────────────────
+bridge/*.log
+bridge/notify.json
+
+# ── Not part of this project ─────────────────────────────────────────────────
+Ref-xiaozhi-esp32-main/
+.claude/
+build.log
+Workstation-BIOS-RAM-Fix-Guide.md

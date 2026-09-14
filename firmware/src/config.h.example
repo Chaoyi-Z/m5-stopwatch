@@ -1,0 +1,37 @@
+#pragma once
+// Copy this file to config.h and fill in your own values. config.h is gitignored
+// so your WiFi password / network details never get committed.
+
+// ── WiFi ─────────────────────────────────────────────────────────────────────
+#define WIFI_SSID    "YOUR_WIFI_SSID"
+#define WIFI_PASS    "YOUR_WIFI_PASSWORD"
+
+// ── Bridge PC WebSocket server ───────────────────────────────────────────────
+// Your PC's LAN IP — run bridge/bridge.py first (it prints the IP to use).
+#define BRIDGE_IP    "192.168.1.100"
+#define BRIDGE_PORT  8765
+
+// ── Timezone — POSIX string (auto-handles DST) ───────────────────────────────
+// EST5EDT = Eastern US (auto switches EST↔EDT). Change if you move.
+// Examples: "CST6CDT,M3.2.0,M11.1.0"  "PST8PDT,M3.2.0,M11.1.0"  "UTC0"
+#define POSIX_TZ  "EST5EDT,M3.2.0,M11.1.0"
+
+// ── Display brightness 0–255 ─────────────────────────────────────────────────
+#define DISPLAY_BRIGHTNESS  80    // 160 was default; lower = less AMOLED power
+#define DISPLAY_SLEEP_MS  300000  // turn off display after 5 min of no touch/button
+                                  // (stays on regardless while Claude is "thinking")
+
+// ── Chime volume 0–255 (done-chime after Claude finishes) ───────────────────
+#define CHIME_VOLUME  51    // ~20% of 255
+
+// ── Permission prompt: how long Blue button stays armed as "Allow" (ms) ──────
+#define PERMISSION_WINDOW_MS  30000   // after this, a stray Blue press won't approve
+
+// ── Heartbeat interval (ms) ──────────────────────────────────────────────────
+#define HEARTBEAT_INTERVAL_MS  10000
+
+// ── Max recording duration before auto-stop (ms) ────────────────────────────
+#define MAX_RECORD_MS  15000
+
+// ── Daily spend budget for the cost bar on the token screen ─────────────────
+#define DAILY_COST_BUDGET  100.0f  // $100/day — adjust to your usual daily spend
