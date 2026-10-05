@@ -278,34 +278,39 @@ class ClaudeMonitor:
 
     # ── ChatGPT / Codex status ────────────────────────────────────────────────────
 
-    # Working while the ChatGPT app's SQLite WALs are being written; idle once quiet.
-    # 20s covers mid-turn write gaps (observed ≤15s) without flapping. Tune if needed.
-    _CODEX_WAL_FRESH_S = 20
+    # WAL mtime is only a cheap "is the app completely quiet" pre-gate (viewing the
+    # window rewrites the WALs, so mtime alone is NOT a working signal). The real
+    # decision comes from turn CONTENT (thread_items) below.
+    _CODEX_WAL_QUIET_S  = 60   # WALs untouched this long => app idle, skip the DB
+    _CODEX_ITEM_FRESH_S = 45   # newest turn-content write newer than this => live turn
 
     def get_codex_status(self) -> str:
         """thinking/idle for ChatGPT's Codex agent.
 
-        The ChatGPT desktop app streams each turn into ~/.codex SQLite DBs, whose
-        -wal files are written every few seconds while a turn runs and go quiet when
-        idle — so WAL freshness is the live signal. Falls back to the Codex CLI's
-        rollout task markers. (Plain tool-less ChatGPT chats aren't captured anywhere.)"""
+        The ChatGPT desktop app streams each turn into ~/.codex SQLite DBs. WAL
+        *mtime* alone is NOT reliable: merely viewing/clicking the app window
+        rewrites state_5 (UI state) and touches the history WAL, which fired false
+        "thinking" + notifications with no task running. Instead we use real turn
+        CONTENT: a turn is in progress only when the newest thread_items write is
+        both fresh AND newer than the last COMPLETED turn (idle viewing never
+        inserts thread_items). Falls back to the Codex CLI's rollout task markers.
+        (Plain tool-less ChatGPT chats aren't captured anywhere.)"""
         codex = Path.home() / ".codex"
-        # 1) ChatGPT desktop app — SQLite WAL write-freshness + precise completion.
-        newest = -1.0
+        # 1) ChatGPT desktop app — cheap WAL-quiet pre-gate, then decide from content.
+        wal_newest = -1.0
         for name in ("thread_history_1.sqlite-wal", "state_5.sqlite-wal"):
             try:
-                newest = max(newest, (codex / name).stat().st_mtime)
+                wal_newest = max(wal_newest, (codex / name).stat().st_mtime)
             except OSError:
                 pass
-        if newest > 0 and time.time() - newest < self._CODEX_WAL_FRESH_S:
-            # A turn writes thread_turns.completed_at at ~its last WAL write. If the
-            # newest activity sits right at the last completion, the turn is DONE; if
-            # activity continued well past it, a turn is in progress. This detects
-            # "done" immediately instead of waiting out the whole freshness window.
-            completed = self._codex_last_completed()
-            if completed is None or newest - completed > 4:
+        if wal_newest > 0 and time.time() - wal_newest < self._CODEX_WAL_QUIET_S:
+            newest_item = self._codex_newest_item()     # secs; newest turn-content write
+            completed   = self._codex_last_completed()  # secs; last finished turn
+            if (newest_item is not None
+                    and time.time() - newest_item < self._CODEX_ITEM_FRESH_S
+                    and (completed is None or newest_item > completed + 2)):
                 return "thinking"
-            # else: app just finished — not thinking (still check the CLI fallback)
+            # else: fresh WAL but no fresh in-progress content = just viewing, or done
         # 2) Codex CLI — rollout task_started / task_complete markers (fallback)
         root = codex / "sessions"
         if root.exists():
@@ -352,6 +357,25 @@ class ClaudeMonitor:
             finally:
                 con.close()
             return float(r) if r is not None else None
+        except Exception:
+            return None
+
+    def _codex_newest_item(self):
+        """Epoch (secs) of the newest thread_items write — created/started/completed.
+        thread_items only grows when the app writes real turn content, so this ignores
+        idle window viewing (which only rewrites UI/projection state). *_ms columns are
+        milliseconds. Read-only; tolerates the DB being locked by the app."""
+        p = Path.home() / ".codex" / "thread_history_1.sqlite"
+        try:
+            con = sqlite3.connect(f"file:{p}?mode=ro", uri=True, timeout=1)
+            try:
+                r = con.execute(
+                    "select max(max(coalesce(created_at_ms,0), "
+                    "coalesce(started_at_ms,0), coalesce(completed_at_ms,0))) "
+                    "from thread_items").fetchone()[0]
+            finally:
+                con.close()
+            return (float(r) / 1000.0) if r else None
         except Exception:
             return None
 
