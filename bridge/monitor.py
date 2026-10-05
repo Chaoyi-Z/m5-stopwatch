@@ -15,6 +15,7 @@ Each assistant message contains:
 import datetime
 import json
 import re
+import sqlite3
 import time
 import urllib.request
 import psutil
@@ -57,6 +58,9 @@ class ClaudeMonitor:
         # notifications from a past session don't replay.
         self._notify_file = Path(__file__).resolve().parent / "notify.json"
         self._last_notify_ts: float = 0.0
+        # ChatGPT / Codex rate-limit cache
+        self._codex_usage: dict = {}
+        self._codex_usage_ts: float = 0.0
 
     # ── Status ────────────────────────────────────────────────────────────────
 
@@ -272,6 +276,148 @@ class ClaudeMonitor:
         slug = path.parent.name           # fallback: last token of the project slug
         return slug.split("-")[-1] if slug else ""
 
+    # ── ChatGPT / Codex status ────────────────────────────────────────────────────
+
+    # Working while the ChatGPT app's SQLite WALs are being written; idle once quiet.
+    # 20s covers mid-turn write gaps (observed ≤15s) without flapping. Tune if needed.
+    _CODEX_WAL_FRESH_S = 20
+
+    def get_codex_status(self) -> str:
+        """thinking/idle for ChatGPT's Codex agent.
+
+        The ChatGPT desktop app streams each turn into ~/.codex SQLite DBs, whose
+        -wal files are written every few seconds while a turn runs and go quiet when
+        idle — so WAL freshness is the live signal. Falls back to the Codex CLI's
+        rollout task markers. (Plain tool-less ChatGPT chats aren't captured anywhere.)"""
+        codex = Path.home() / ".codex"
+        # 1) ChatGPT desktop app — SQLite WAL write-freshness + precise completion.
+        newest = -1.0
+        for name in ("thread_history_1.sqlite-wal", "state_5.sqlite-wal"):
+            try:
+                newest = max(newest, (codex / name).stat().st_mtime)
+            except OSError:
+                pass
+        if newest > 0 and time.time() - newest < self._CODEX_WAL_FRESH_S:
+            # A turn writes thread_turns.completed_at at ~its last WAL write. If the
+            # newest activity sits right at the last completion, the turn is DONE; if
+            # activity continued well past it, a turn is in progress. This detects
+            # "done" immediately instead of waiting out the whole freshness window.
+            completed = self._codex_last_completed()
+            if completed is None or newest - completed > 4:
+                return "thinking"
+            # else: app just finished — not thinking (still check the CLI fallback)
+        # 2) Codex CLI — rollout task_started / task_complete markers (fallback)
+        root = codex / "sessions"
+        if root.exists():
+            best, best_mt = None, -1.0
+            for f in root.glob("**/*.jsonl"):
+                try:
+                    mt = f.stat().st_mtime
+                except OSError:
+                    continue
+                if mt > best_mt:
+                    best, best_mt = f, mt
+            if best is not None and time.time() - best_mt < 900:
+                try:
+                    size = best.stat().st_size
+                    with open(best, "r", encoding="utf-8", errors="replace") as fh:
+                        fh.seek(max(0, size - 65536))
+                        tail = fh.read()
+                    for line in reversed(tail.splitlines()):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            o = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if o.get("type") == "event_msg":
+                            sub = (o.get("payload") or o.get("msg") or {}).get("type", "")
+                            if sub == "task_complete":
+                                break
+                            if sub == "task_started":
+                                return "thinking"
+                except OSError:
+                    pass
+        return "idle"
+
+    def _codex_last_completed(self):
+        """Epoch of the most recently completed Codex turn (thread_turns.completed_at),
+        or None. Read-only; tolerates the DB being locked by the app."""
+        p = Path.home() / ".codex" / "thread_history_1.sqlite"
+        try:
+            con = sqlite3.connect(f"file:{p}?mode=ro", uri=True, timeout=1)
+            try:
+                r = con.execute("select max(completed_at) from thread_turns").fetchone()[0]
+            finally:
+                con.close()
+            return float(r) if r is not None else None
+        except Exception:
+            return None
+
+    def get_codex_usage(self) -> dict:
+        """ChatGPT/Codex rate limits from the newest ~/.codex rollout's rate_limits
+        (primary=5h window, secondary=weekly). Cached 60s; {} if unavailable."""
+        if self._codex_usage and time.monotonic() - self._codex_usage_ts < 60.0:
+            return self._codex_usage
+        root = Path.home() / ".codex" / "sessions"
+        if not root.exists():
+            return self._codex_usage
+        files = []
+        for f in root.glob("**/*.jsonl"):
+            try:
+                files.append((f.stat().st_mtime, f))
+            except OSError:
+                pass
+        files.sort(reverse=True)
+        for _, f in files[:3]:                     # newest few sessions
+            try:
+                size = f.stat().st_size
+                with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                    fh.seek(max(0, size - 131072))
+                    tail = fh.read()
+            except OSError:
+                continue
+            for line in reversed(tail.splitlines()):
+                if "rate_limits" not in line:
+                    continue
+                try:
+                    o = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                rl = (o.get("payload") or o.get("msg") or {}).get("rate_limits") or o.get("rate_limits")
+                if not rl:
+                    continue
+                prim = rl.get("primary") or {}
+                sec = rl.get("secondary") or {}
+                self._codex_usage = {
+                    "sess_pct": int(round(prim.get("used_percent", 0))),
+                    "sess_reset_min": self._mins_until_ts(prim.get("resets_at")),
+                    "week_pct": int(round(sec.get("used_percent", 0))),
+                    "week_reset": self._fmt_reset_ts(sec.get("resets_at")),
+                    "plan": rl.get("plan_type", ""),
+                }
+                self._codex_usage_ts = time.monotonic()
+                return self._codex_usage
+        return self._codex_usage
+
+    @staticmethod
+    def _mins_until_ts(ts) -> int:
+        try:
+            return max(0, int((float(ts) - time.time()) // 60))
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _fmt_reset_ts(ts) -> str:
+        try:
+            dt = datetime.datetime.fromtimestamp(float(ts)).astimezone()
+        except (TypeError, ValueError, OSError):
+            return ""
+        h12 = dt.hour % 12 or 12
+        ap = "AM" if dt.hour < 12 else "PM"
+        return f"{dt.strftime('%a')} {h12}:{dt.minute:02d}{ap}"
+
     # ── Session tokens ────────────────────────────────────────────────────────
 
     def get_tokens(self) -> dict:
@@ -333,11 +479,10 @@ class ClaudeMonitor:
 
     def get_usage_limits(self) -> dict:
         """
-        Fetch rate-limit usage via the Claude Code OAuth token.
-        Returns dict with keys: session_pct, session_reset_min,
-                                weekly_all_pct, weekly_sonnet_pct, weekly_reset_str
-        Returns the cached value on failure.
-        Cached 60 s on success, 300 s on failure.
+        Fetch rate-limit usage via the Claude Code OAuth token in .credentials.json.
+        Returns the cached value on failure. Cached 60 s on success, 300 s on failure.
+        If the token has expired (401), re-login to Claude Code to refresh it — the
+        bridge reads the token fresh each call, so a new one is picked up automatically.
         """
         if time.monotonic() - self._usage_ts < 60.0:
             return self._usage
@@ -345,25 +490,20 @@ class ClaudeMonitor:
         creds_file = Path.home() / ".claude" / ".credentials.json"
         try:
             with open(creds_file) as f:
-                creds = json.load(f)
-            token = creds["claudeAiOauth"]["accessToken"]
+                token = json.load(f)["claudeAiOauth"]["accessToken"]
         except (OSError, KeyError, json.JSONDecodeError) as e:
             print(f"[Monitor] Credentials unavailable: {e}")
             return self._usage
 
-        # OAuth token (sk-ant-oat...) authenticates against api.anthropic.com.
-        # Requires the oauth beta header; the claude.ai web API (cookie-based)
-        # rejects this token with 403.
         headers = {
-            "Authorization":   f"Bearer {token}",
-            "anthropic-beta":  "oauth-2025-04-20",
+            "Authorization":     f"Bearer {token}",
+            "anthropic-beta":    "oauth-2025-04-20",
             "anthropic-version": "2023-06-01",
-            "Content-Type":    "application/json",
+            "Content-Type":      "application/json",
         }
-        url = "https://api.anthropic.com/api/oauth/usage"
-
         try:
-            req = urllib.request.Request(url, headers=headers)
+            req = urllib.request.Request(
+                "https://api.anthropic.com/api/oauth/usage", headers=headers)
             with urllib.request.urlopen(req, timeout=8) as r:
                 data = json.loads(r.read())
             parsed = self._parse_usage(data)
@@ -375,10 +515,9 @@ class ClaudeMonitor:
                       f"sonnet {parsed['weekly_sonnet_pct']}%")
                 return self._usage
         except Exception as e:
-            print(f"[Monitor] Usage fetch failed: {e}")
+            print(f"[Monitor] Usage fetch failed (token expired? re-login to Claude): {e}")
 
-        # Failed — back off 5 minutes before trying again
-        self._usage_ts = time.monotonic() - 60.0 + 300.0
+        self._usage_ts = time.monotonic() - 60.0 + 300.0   # back off 5 min
         return self._usage
 
     def _parse_usage(self, data: dict) -> dict:

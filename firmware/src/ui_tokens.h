@@ -51,104 +51,79 @@ static inline void _tkCaption(M5Canvas& cv, int cx, int y, const char* s) {
     cv.drawString(s, cx, y);
 }
 
-// ── Usage screen — mirrors the claude.ai "Your usage limits" dialog ────────────
-// Layout is anchored to the screen centre so it stays centred on any panel size
-// and clear of the round bezel. Each limit row has its own colour.
-// sessPct < 0 means no usage data has been received yet.
+// One provider block: a coloured title + a 5h bar + a Week bar + a weekly-reset note.
+// pct < 0 → "waiting for data". Returns nothing; draws at the given top y.
+static inline void _tkProvider(M5Canvas& cv, int barL, int barR, int cx, int topY,
+                               const char* name, uint16_t nameCol,
+                               int sessPct, int weekPct, const String& weekReset,
+                               uint16_t sessCol, uint16_t weekCol) {
+    int barH = 16;
+    cv.setFont(&fonts::Font2);
+    cv.setTextDatum(ML_DATUM);
+    cv.setTextColor(nameCol);
+    cv.drawString(name, barL, topY);
+    if (sessPct < 0) {
+        cv.setTextColor(cv.color565(95, 95, 120));
+        cv.setTextDatum(MR_DATUM);
+        cv.drawString("waiting for data", barR, topY);
+        cv.setTextDatum(ML_DATUM);
+        return;
+    }
+    char buf[12];
+    snprintf(buf, sizeof(buf), "%d%%", sessPct);
+    _tkBar(cv, barL, barR, topY + 14, barH, "5h",   buf, sessPct / 100.0f, sessCol);
+    snprintf(buf, sizeof(buf), "%d%%", weekPct);
+    _tkBar(cv, barL, barR, topY + 38, barH, "Week", buf, weekPct / 100.0f, weekCol);
+    if (weekReset.length() > 0) {
+        char rbuf[40];
+        snprintf(rbuf, sizeof(rbuf), "resets %s", weekReset.c_str());
+        cv.setFont(&fonts::Font2);
+        cv.setTextDatum(MR_DATUM);
+        cv.setTextColor(cv.color565(90, 90, 115));
+        cv.drawString(rbuf, barR, topY + 60);
+        cv.setTextDatum(ML_DATUM);
+    }
+}
+
+// ── Usage screen — Claude + ChatGPT rate limits, two stacked sections ───────────
 inline void renderUsageScreen(M5Canvas& cv,
                                int sessPct, int sessResetMin,
                                int weekAllPct, int weekSonPct,
                                const String& weekReset,
+                               int gptSessPct, int gptSessResetMin,
+                               int gptWeekPct, const String& gptWeekReset,
                                const String& model,
                                uint32_t sessionSec) {
+    (void)weekSonPct; (void)sessResetMin; (void)gptSessResetMin;
+    (void)model; (void)sessionSec;
     int W = cv.width(), H = cv.height();
     int cx = W / 2, cy = H / 2;
     cv.fillScreen(TFT_BLACK);
 
-    // Per-row identity colours
-    uint16_t accent = cv.color565(0, 150, 255);   // brand blue (header + session)
-    uint16_t cSess  = cv.color565(0, 150, 255);   // session  — blue
-    uint16_t cAll   = cv.color565(175, 120, 255); // weekly all — violet
-    uint16_t cSon   = cv.color565(0, 205, 150);   // weekly sonnet — teal
-
     int halfDiv = (int)(W * 0.39f);
     int barL = cx - (int)(W * 0.37f);
     int barR = cx + (int)(W * 0.37f);
-    int barH = 18;
 
-    // ── Header: star + "Usage" centred, model name centred below ────────────────
-    int iconX = cx - 48;
-    _tkDrawStar(cv, iconX, cy - 128, 18, accent);
+    // Header
+    int iconX = cx - 44;
+    _tkDrawStar(cv, iconX, cy - 118, 16, cv.color565(0, 150, 255));
     cv.setFont(&fonts::Font4);
     cv.setTextDatum(ML_DATUM);
     cv.setTextColor(TFT_WHITE);
-    cv.drawString("Usage", iconX + 26, cy - 128);
+    cv.drawString("Usage", iconX + 24, cy - 118);
+    cv.drawFastHLine(cx - halfDiv, cy - 98, 2 * halfDiv, cv.color565(36, 36, 56));
 
-    if (model.length()) {
-        cv.setFont(&fonts::Font2);
-        cv.setTextDatum(MC_DATUM);
-        cv.setTextColor(accent);
-        cv.drawString(model.c_str(), cx, cy - 100);
-    }
+    // Claude — cyan title, blue 5h / violet Week
+    _tkProvider(cv, barL, barR, cx, cy - 80, "Claude", cv.color565(0, 180, 255),
+                sessPct, weekAllPct, weekReset,
+                cv.color565(0, 150, 255), cv.color565(175, 120, 255));
 
-    cv.drawFastHLine(cx - halfDiv, cy - 82, 2 * halfDiv, cv.color565(36, 36, 56));
+    // ChatGPT — red title, red 5h / amber Week
+    _tkProvider(cv, barL, barR, cx, cy + 10, "ChatGPT", cv.color565(255, 90, 70),
+                gptSessPct, gptWeekPct, gptWeekReset,
+                cv.color565(255, 90, 70), cv.color565(255, 165, 40));
 
-    // ── No data yet ─────────────────────────────────────────────────────────────
-    if (sessPct < 0) {
-        cv.setFont(&fonts::Font2);
-        cv.setTextDatum(MC_DATUM);
-        cv.setTextColor(cv.color565(120, 120, 150));
-        cv.drawString("Waiting for usage data...", cx, cy);
-        cv.setTextColor(cv.color565(90, 90, 115));
-        cv.drawString("(needs claude.ai login)", cx, cy + 24);
-        cv.setTextDatum(TL_DATUM);
-        return;
-    }
-
-    char buf[16];
-
-    // ── Current session ─────────────────────────────────────────────────────────
-    snprintf(buf, sizeof(buf), "%d%%", sessPct);
-    _tkBar(cv, barL, barR, cy - 64, barH, "Session", buf, sessPct / 100.0f, cSess);
-    if (sessResetMin > 0) {
-        char rbuf[24];
-        if (sessResetMin >= 60)
-            snprintf(rbuf, sizeof(rbuf), "resets in %dh %dm", sessResetMin / 60, sessResetMin % 60);
-        else
-            snprintf(rbuf, sizeof(rbuf), "resets in %dm", sessResetMin);
-        _tkCaption(cv, cx, cy - 33, rbuf);
-    }
-
-    // ── Weekly limits ─────────────────────────────────────────────────────────────
-    cv.setFont(&fonts::Font2);
-    cv.setTextDatum(ML_DATUM);
-    cv.setTextColor(cv.color565(130, 130, 160));
-    cv.drawString("Weekly limits", barL, cy - 10);
-
-    snprintf(buf, sizeof(buf), "%d%%", weekAllPct);
-    _tkBar(cv, barL, barR, cy + 8, barH, "All", buf, weekAllPct / 100.0f, cAll);
-
-    snprintf(buf, sizeof(buf), "%d%%", weekSonPct);
-    _tkBar(cv, barL, barR, cy + 38, barH, "Sonnet", buf, weekSonPct / 100.0f, cSon);
-
-    if (weekReset.length() > 0) {
-        char rbuf[40];
-        snprintf(rbuf, sizeof(rbuf), "resets %s", weekReset.c_str());
-        _tkCaption(cv, cx, cy + 69, rbuf);
-    }
-
-    // ── Session duration footer ─────────────────────────────────────────────────
-    cv.setFont(&fonts::Font2);
-    cv.setTextDatum(MC_DATUM);
-    cv.setTextColor(cv.color565(80, 80, 105));
-    cv.drawString("session", cx, cy + 100);
-    uint32_t sm = sessionSec / 60, ss = sessionSec % 60;
-    char tbuf[12];
-    snprintf(tbuf, sizeof(tbuf), "%dm%02ds", (int)sm, (int)ss);
-    cv.setTextColor(cv.color565(120, 120, 150));
-    cv.drawString(tbuf, cx, cy + 122);
-
-    // ── Nav dots ────────────────────────────────────────────────────────────────
+    // Nav dots
     int nsp = 24, ndy = H - 28;
     for (int i = 0; i < 3; i++) {
         int nx = cx + (i-1) * nsp;

@@ -23,7 +23,9 @@ bool wsConnected = false;
 // ── Shared state ──────────────────────────────────────────────────────────────
 String claudeStatus     = "idle";
 bool   chimePending     = false;   // beep when Claude finishes thinking
-bool   wakeForThink     = false;   // wake the screen once when Claude starts working
+bool   wakeForThink     = false;   // wake the screen once when Claude/ChatGPT starts working
+String gptStatus        = "idle";  // ChatGPT/Codex status → red spinner
+bool   gptChimePending  = false;   // ChatGPT finished → distinct (descending) done-chime
 int    tokenIn        = 0;
 int    tokenOut       = 0;
 float  cost           = 0.0f;
@@ -36,6 +38,11 @@ int    usageSessResetMin = 0;
 int    usageWeekAllPct   = 0;
 int    usageWeekSonPct   = 0;
 String usageWeekReset    = "";
+// ChatGPT/Codex usage limits (from GPTUSAGE: message)
+int    gptUsageSessPct   = -1;   // -1 = not yet received
+int    gptUsageSessReset = 0;
+int    gptUsageWeekPct   = 0;
+String gptUsageWeekReset = "";
 String currentModel      = "";   // friendly model name, e.g. "Opus 4.8"
 int    battPct        = 0;
 bool   recording      = false;
@@ -172,6 +179,25 @@ void handleMessage(const String& msg) {
     } else if (msg.startsWith("MODEL:")) {
         currentModel = msg.substring(6);
         currentModel.trim();
+    } else if (msg.startsWith("GPT:")) {
+        String ns = msg.substring(4);
+        ns.trim();
+        // done-chime on thinking → finished; wake+home on idle → thinking
+        if (gptStatus == "thinking" && ns != "thinking") gptChimePending = true;
+        if (gptStatus != "thinking" && ns == "thinking") wakeForThink = true;
+        gptStatus = ns;
+    } else if (msg.startsWith("GPTUSAGE:")) {
+        auto exg = [&](const char* key) -> String {
+            int idx = msg.indexOf(key);
+            if (idx < 0) return "0";
+            idx += strlen(key);
+            int end = msg.indexOf(',', idx);
+            return (end < 0) ? msg.substring(idx) : msg.substring(idx, end);
+        };
+        gptUsageSessPct   = exg("sess=").toInt();
+        gptUsageSessReset = exg("sreset=").toInt();
+        gptUsageWeekPct   = exg("week=").toInt();
+        gptUsageWeekReset = exg("wreset=");
     } else if (msg.startsWith("NOTIFYP:")) {
         notifyMsg = msg.substring(8);
         notifyMsg.trim();
@@ -594,6 +620,22 @@ void loop() {
         chimePending = false;  // discard if within cooldown
     }
 
+    // ChatGPT/Codex done-chime — DESCENDING (distinct from Claude's ascending).
+    static unsigned long lastGptChimeMs = 0;
+    if (gptChimePending && (millis() - lastGptChimeMs > 3000)) {
+        gptChimePending = false;
+        lastGptChimeMs = millis();
+        M5.Speaker.setVolume(CHIME_VOLUME);
+        M5.Power.setVibration(255);
+        M5.Speaker.tone(1568, 100); delay(130);  // G6
+        M5.Speaker.tone(1319, 100); delay(130);  // E6
+        M5.Speaker.tone(1047, 200); delay(250);  // C6  (descending)
+        M5.Power.setVibration(0);
+        M5.Speaker.setVolume(255);
+    } else if (gptChimePending) {
+        gptChimePending = false;
+    }
+
     // Attention alert (permission prompt / notification) — distinct from the
     // done-chime so the two are easy to tell apart. Wakes the screen.
     if (notifyPending) {
@@ -644,7 +686,7 @@ void loop() {
 
     // Keep the screen ON the whole time Claude is working, plus during audio ops /
     // pending permission. (Normal 5-min idle sleep applies only when not working.)
-    bool keepAwake = (claudeStatus == "thinking")
+    bool keepAwake = (claudeStatus == "thinking") || (gptStatus == "thinking")
                    || recording || transcribing || memoRecording || memoPlaying || permActive;
     if (keepAwake) {
         _lastActivityMs = now;
@@ -670,6 +712,7 @@ void loop() {
     bool needsAnim = recording || transcribing || memoRecording || memoPlaying
                    || (claudeStatus == "thinking")
                    || (claudeStatus == "waiting")
+                   || (gptStatus == "thinking")
                    || notifyActive;
     unsigned long drawInterval = needsAnim ? 50 : 1000;
 
@@ -687,13 +730,15 @@ void loop() {
                     renderStatusScreen(canvas, wsConnected, claudeStatus,
                                        battPct, lastTranscript, animFrame,
                                        weatherCode, weatherTemp,
-                                       recording, transcribing, micLevel);
+                                       recording, transcribing, micLevel, gptStatus);
                     break;
                 case SCR_TOKENS:
                     renderUsageScreen(canvas,
                                       usageSessPct, usageSessResetMin,
-                                      usageWeekAllPct, usageWeekSonPct,
-                                      usageWeekReset, currentModel, sessionSec);
+                                      usageWeekAllPct, usageWeekSonPct, usageWeekReset,
+                                      gptUsageSessPct, gptUsageSessReset,
+                                      gptUsageWeekPct, gptUsageWeekReset,
+                                      currentModel, sessionSec);
                     break;
                 case SCR_MEMO: {
                     float playFrac = 0.0f;

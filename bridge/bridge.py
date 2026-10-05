@@ -14,6 +14,8 @@ Protocol:
                         MODEL:friendly-name
                         NOTIFY:message          (general attention)
                         NOTIFYP:message         (permission prompt → Blue = Allow)
+                        GPT:idle|thinking|waiting  (ChatGPT/Codex → red spinner)
+                        GPTUSAGE:sess=N,sreset=N,week=N,wreset=str  (ChatGPT limits)
                         WEATHER:temp=N,code=N
                         TRANSCRIPT:text
                         CONFIRM:injected
@@ -55,6 +57,10 @@ _prev_remote: str = "idle"          # SSH cluster (via RSTATUS)
 _last_done_local_ts: float = 0.0
 _last_done_remote_ts: float = 0.0   # separate cooldowns so we never miss a source
 _local_stop_ts: float = 0.0         # when local last went non-thinking (0 = working/armed-off)
+# ChatGPT / Codex (separate channel so Claude's logic is untouched)
+_prev_gpt: str = "idle"
+_last_done_gpt_ts: float = 0.0
+_gpt_stop_ts: float = 0.0
 
 def _ntfy_sync(title: str, message: str, tags: str = "", priority: str = "default") -> None:
     try:
@@ -210,6 +216,7 @@ async def _handle_client(ws):
 
 async def _status_loop():
     global _clients, _prev_local, _prev_remote, _last_done_local_ts, _last_done_remote_ts, _local_stop_ts
+    global _prev_gpt, _last_done_gpt_ts, _gpt_stop_ts
     loop = asyncio.get_running_loop()
 
     # Fetch weather once at startup
@@ -252,6 +259,20 @@ async def _status_loop():
             await _push("Claude", "Job done - Cluster (SSH)", tags="white_check_mark")
         _prev_remote = remote_status
 
+        # ── ChatGPT / Codex (separate GPT: channel → red spinner on the watch) ──
+        gpt_status = monitor.get_codex_status()
+        if gpt_status == "thinking":
+            _gpt_stop_ts = 0.0
+        else:
+            if _prev_gpt == "thinking":
+                _gpt_stop_ts = now_m
+            elif _gpt_stop_ts and now_m - _gpt_stop_ts >= 12 \
+                    and now_m - _last_done_gpt_ts > 20:
+                _last_done_gpt_ts = now_m
+                _gpt_stop_ts = 0.0
+                await _push("ChatGPT", "Job done - ChatGPT / Codex", tags="checkered_flag")
+        _prev_gpt = gpt_status
+
         # Merged status for the watch: 'thinking' wins so the spinner shows;
         # 'waiting' shows (and chimes) when local is idle. Remote stale after 10 min.
         status = local_status
@@ -272,6 +293,13 @@ async def _status_loop():
         ]
         if model:
             msgs.append(f"MODEL:{model}")
+        msgs.append(f"GPT:{gpt_status}")
+        cu = monitor.get_codex_usage()
+        if cu:
+            msgs.append(
+                f"GPTUSAGE:sess={cu.get('sess_pct',0)},sreset={cu.get('sess_reset_min',0)}"
+                f",week={cu.get('week_pct',0)},wreset={cu.get('week_reset','')}"
+            )
 
         # One-shot attention alert. NOTIFYP = permission prompt (watch Blue = Allow);
         # NOTIFY = general attention.

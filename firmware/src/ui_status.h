@@ -92,7 +92,8 @@ inline void renderStatusScreen(M5Canvas& cv, bool connected,
                                 int weatherCode, int weatherTemp,
                                 bool recording = false,
                                 bool transcribing = false,
-                                float micLevel = 0.0f) {
+                                float micLevel = 0.0f,
+                                const String& gptStatus = "idle") {
     int W = cv.width(), H = cv.height();
     int cx = W/2, cy = H/2;
 
@@ -215,14 +216,36 @@ inline void renderStatusScreen(M5Canvas& cv, bool connected,
         cv.setTextColor(cv.color565(220, 60, 60));
         cv.drawString("No Bridge \x97 start bridge.py", cx, H - 48);
 
-    } else if (status == "thinking") {
-        int startA = (int)(animFrame * 3) % 360;
-        cv.drawArc(cx, cy, 222, 210, startA,           (startA + 100) % 360, cv.color565(0, 220, 255));
-        cv.drawArc(cx, cy, 222, 210, (startA+180)%360, (startA + 280) % 360, cv.color565(0, 80, 140));
+    } else if (status == "thinking" || gptStatus == "thinking") {
+        // Both can run at once: Claude = cyan OUTER ring, ChatGPT = red INNER ring.
+        bool claudeT = (status == "thinking");
+        bool gptT    = (gptStatus == "thinking");
+        int a = (int)(animFrame * 3) % 360;
+        if (claudeT) {
+            cv.drawArc(cx, cy, 222, 210, a,            (a + 100) % 360, cv.color565(0, 220, 255));
+            cv.drawArc(cx, cy, 222, 210, (a+180)%360,  (a + 280) % 360, cv.color565(0, 80, 140));
+        }
+        if (gptT) {
+            cv.drawArc(cx, cy, 198, 186, a,            (a + 100) % 360, cv.color565(255, 60, 60));
+            cv.drawArc(cx, cy, 198, 186, (a+180)%360,  (a + 280) % 360, cv.color565(140, 20, 20));
+        }
         cv.setFont(&fonts::Font2);
         bool blink = (animFrame / 10) % 2;
-        cv.setTextColor(blink ? cv.color565(0, 200, 240) : cv.color565(0, 100, 140));
-        cv.drawString("Claude thinking...", cx, H - 48);
+        if (claudeT && gptT) {
+            cv.setTextColor(blink ? cv.color565(0, 200, 240) : cv.color565(0, 90, 130));
+            cv.setTextDatum(MR_DATUM);
+            cv.drawString("Claude", cx - 6, H - 48);
+            cv.setTextColor(blink ? cv.color565(255, 90, 90) : cv.color565(150, 40, 40));
+            cv.setTextDatum(ML_DATUM);
+            cv.drawString("+ ChatGPT", cx + 6, H - 48);
+            cv.setTextDatum(MC_DATUM);
+        } else if (gptT) {
+            cv.setTextColor(blink ? cv.color565(255, 90, 90) : cv.color565(150, 40, 40));
+            cv.drawString("ChatGPT thinking...", cx, H - 48);
+        } else {
+            cv.setTextColor(blink ? cv.color565(0, 200, 240) : cv.color565(0, 100, 140));
+            cv.drawString("Claude thinking...", cx, H - 48);
+        }
 
     } else if (status == "waiting") {
         bool pulse = (animFrame / 10) % 2;
