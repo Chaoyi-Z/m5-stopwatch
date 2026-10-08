@@ -220,7 +220,10 @@ inline void renderStatusScreen(M5Canvas& cv, bool connected,
         // Both can run at once: Claude = cyan OUTER ring, ChatGPT = red INNER ring.
         bool claudeT = (status == "thinking");
         bool gptT    = (gptStatus == "thinking");
-        int a = (int)(animFrame * 3) % 360;
+        // Continuous, time-based angle (60 deg/s) so the ring rotates EVENLY even when
+        // the draw rate (~15fps) doesn't divide the animation clock. Frame-counted
+        // angles jump by irregular amounts per frame, which reads as judder.
+        int a = (int)((millis() * 3UL / 50UL) % 360UL);
         if (claudeT) {
             cv.drawArc(cx, cy, 222, 210, a,            (a + 100) % 360, cv.color565(0, 220, 255));
             cv.drawArc(cx, cy, 222, 210, (a+180)%360,  (a + 280) % 360, cv.color565(0, 80, 140));

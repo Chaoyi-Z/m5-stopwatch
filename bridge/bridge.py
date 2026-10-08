@@ -251,12 +251,12 @@ async def _status_loop():
                 _last_done_local_ts = now_m
                 _local_stop_ts = 0.0                    # disarm; fire once
                 await _push("Claude", f"Job done - {monitor.get_source_label()}",
-                            tags="white_check_mark")
+                            tags="white_check_mark", priority="high")
         _prev_local = local_status
         if _prev_remote == "thinking" and remote_status != "thinking" \
                 and now_m - _last_done_remote_ts > 20:
             _last_done_remote_ts = now_m
-            await _push("Claude", "Job done - Cluster (SSH)", tags="white_check_mark")
+            await _push("Claude", "Job done - Cluster (SSH)", tags="white_check_mark", priority="high")
         _prev_remote = remote_status
 
         # ── ChatGPT / Codex (separate GPT: channel → red spinner on the watch) ──
@@ -270,7 +270,7 @@ async def _status_loop():
                     and now_m - _last_done_gpt_ts > 20:
                 _last_done_gpt_ts = now_m
                 _gpt_stop_ts = 0.0
-                await _push("ChatGPT", "Job done - ChatGPT / Codex", tags="checkered_flag")
+                await _push("ChatGPT", "Job done - ChatGPT / Codex", tags="checkered_flag", priority="high")
         _prev_gpt = gpt_status
 
         # Merged status for the watch: 'thinking' wins so the spinner shows;
@@ -345,7 +345,13 @@ async def _main():
     print(f"  Set BRIDGE_IP to \"{local_ip}\" in firmware/src/config.h")
     print("=" * 52)
 
-    async with websockets.serve(_handle_client, "0.0.0.0", PORT):
+    # ping_interval=None disables the library's protocol-level auto-ping. Default is a
+    # Ping every 20s with the connection killed if no Pong in 20s — over the higher-
+    # latency cross-subnet WiFi path the watch's pong arrives late/lost, which dropped
+    # the link every ~20-40s (connect -> few heartbeats -> drop -> reconnect). The watch
+    # sends its own CMD:HEARTBEAT and the 1s status broadcast fails fast on a truly dead
+    # socket, so app-level liveness is already covered.
+    async with websockets.serve(_handle_client, "0.0.0.0", PORT, ping_interval=None):
         print("[Bridge] Waiting for device…")
         await _status_loop()
 

@@ -529,7 +529,11 @@ void setup() {
     for (int i = 0; i < 40 && WiFi.status() != WL_CONNECTED; i++) delay(500);
 
     if (WiFi.status() == WL_CONNECTED) {
-        esp_wifi_set_ps(WIFI_PS_MIN_MODEM);  // light modem sleep — stable on MIT enterprise WiFi
+        // No modem sleep: keep the radio fully awake so MIT's enterprise APs never
+        // deauth us for a missed beacon (MIN_MODEM still dropped the link every
+        // ~20-40s; MAX_MODEM was worse). Costs a little battery — fine for a desk
+        // companion usually on USB. This is the opposite of MAX_MODEM, not a repeat.
+        esp_wifi_set_ps(WIFI_PS_NONE);
         configTzTime(POSIX_TZ, "ntp.mit.edu", "pool.ntp.org");
         showConnecting("Syncing time...");
         struct tm _t; int _ntpTry = 0;
@@ -538,7 +542,7 @@ void setup() {
         showConnecting("Connecting to bridge...");
         ws.begin(BRIDGE_IP, BRIDGE_PORT, "/");
         ws.onEvent(onWsEvent);
-        ws.setReconnectInterval(5000);
+        ws.setReconnectInterval(2000);   // re-establish the socket quickly after a drop
     } else {
         showConnecting("WiFi failed — check config.h");
         delay(3000);
@@ -554,7 +558,11 @@ void setup() {
 // ── Loop ─────────────────────────────────────────────────────────────────────
 void loop() {
     M5.update();
-    ws.loop();
+    // Only service the WebSocket while WiFi is actually associated. When WiFi drops,
+    // ws.loop() would otherwise block on a TCP reconnect timeout every frame, which
+    // froze the animation mid-spin. Skipping it while disconnected keeps the UI smooth;
+    // once WiFi re-associates (watchdog below) ws.loop() resumes and reconnects.
+    if (WiFi.status() == WL_CONNECTED) ws.loop();
 
     handleButtons();
     handleTouch();
@@ -664,7 +672,7 @@ void loop() {
     // WiFi watchdog: if the association dropped (APs deauth idle clients), force a
     // re-join. The WebSocket then re-establishes itself via setReconnectInterval.
     static unsigned long lastWifiCheck = 0;
-    if (now - lastWifiCheck > 10000) {
+    if (now - lastWifiCheck > 3000) {          // check often so a drop rejoins fast
         lastWifiCheck = now;
         if (WiFi.status() != WL_CONNECTED) {
             WiFi.reconnect();
