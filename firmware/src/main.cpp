@@ -558,11 +558,11 @@ void setup() {
 // ── Loop ─────────────────────────────────────────────────────────────────────
 void loop() {
     M5.update();
-    // Only service the WebSocket while WiFi is actually associated. When WiFi drops,
-    // ws.loop() would otherwise block on a TCP reconnect timeout every frame, which
-    // froze the animation mid-spin. Skipping it while disconnected keeps the UI smooth;
-    // once WiFi re-associates (watchdog below) ws.loop() resumes and reconnects.
-    if (WiFi.status() == WL_CONNECTED) ws.loop();
+    // Always service the WebSocket so it keeps retrying. (An earlier WiFi.status()
+    // guard here caused the watch to go permanently silent after an AP roam: the ESP32
+    // can report non-WL_CONNECTED while actually associated + pingable, which skipped
+    // ws.loop() so the socket never reconnected. Reliable reconnect > smoother UI.)
+    ws.loop();
 
     handleButtons();
     handleTouch();
@@ -672,10 +672,10 @@ void loop() {
     // WiFi watchdog: if the association dropped (APs deauth idle clients), force a
     // re-join. The WebSocket then re-establishes itself via setReconnectInterval.
     static unsigned long lastWifiCheck = 0;
-    if (now - lastWifiCheck > 3000) {          // check often so a drop rejoins fast
-        lastWifiCheck = now;
-        if (WiFi.status() != WL_CONNECTED) {
-            WiFi.reconnect();
+    if (now - lastWifiCheck > 10000) {         // gentle backstop; setAutoReconnect(true)
+        lastWifiCheck = now;                    // already re-joins roams in the background.
+        if (WiFi.status() != WL_CONNECTED) {    // Too-frequent reconnect() churns a flaky
+            WiFi.reconnect();                   // status reading and drops the live link.
         }
     }
 
