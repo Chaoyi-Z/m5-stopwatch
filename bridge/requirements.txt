@@ -5,5 +5,8 @@ pyperclip>=1.8
 pygetwindow>=0.0.9
 faster-whisper>=1.0
 numpy>=1.24
+# desktop usage widget: system-tray icon (optional; widget still runs without it)
+pystray>=0.19
+Pillow>=10.0
 # fallback only (used if faster-whisper is not installed):
 SpeechRecognition>=3.10

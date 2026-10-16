@@ -15,6 +15,13 @@ import threading
 import tkinter as tk
 from pathlib import Path
 
+try:
+    import pystray
+    from PIL import Image, ImageDraw
+    _HAS_TRAY = True
+except Exception:
+    _HAS_TRAY = False
+
 # Import the bridge's monitor (same folder).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from monitor import ClaudeMonitor  # noqa: E402
@@ -43,6 +50,16 @@ DOT_OFF     = "#555566"
 
 W, H = 340, 276
 POS_FILE = Path(__file__).resolve().parent / ".usage_widget_pos"
+
+def _tray_image():
+    """A tiny 3-bar chart icon for the system tray."""
+    img = Image.new("RGBA", (64, 64), (14, 14, 20, 255))
+    d = ImageDraw.Draw(img)
+    d.rectangle([14, 34, 24, 52], fill=(0, 150, 255, 255))    # blue
+    d.rectangle([28, 22, 38, 52], fill=(175, 120, 255, 255))  # violet
+    d.rectangle([42, 30, 52, 52], fill=(255, 90, 70, 255))    # red
+    return img
+
 
 mon = ClaudeMonitor()
 
@@ -100,8 +117,50 @@ class Widget:
         self.cv.bind("<Button-1>", self._press)
         self.cv.bind("<B1-Motion>", self._drag)
         self._dx = self._dy = 0
+        self.hidden = False
+        self.icon = None
 
         self.redraw()
+
+    # ── tray / show / hide ────────────────────────────────────────────────────
+    def setup_tray(self):
+        menu = pystray.Menu(
+            pystray.MenuItem("Show / Hide", self._tray_toggle, default=True),
+            pystray.MenuItem("Exit", self._tray_exit),
+        )
+        self.icon = pystray.Icon("ai_usage", _tray_image(), "AI Usage", menu)
+        threading.Thread(target=self.icon.run, daemon=True).start()
+
+    def hide(self):
+        self._save_pos()
+        self.root.withdraw()
+        self.hidden = True
+
+    def show(self):
+        self._place()                       # restore saved position
+        self.root.deiconify()
+        self.root.overrideredirect(True)    # re-assert frameless after deiconify
+        self.root.attributes("-topmost", True)
+        self.root.lift()
+        self.hidden = False
+
+    def toggle(self):
+        self.hide() if not self.hidden else self.show()
+
+    def quit(self):
+        self._save_pos()
+        try:
+            if self.icon:
+                self.icon.stop()
+        except Exception:
+            pass
+        self.root.destroy()
+
+    def _tray_toggle(self, icon=None, item=None):
+        self.root.after(0, self.toggle)
+
+    def _tray_exit(self, icon=None, item=None):
+        self.root.after(0, self.quit)
 
     # ── window placement / drag ───────────────────────────────────────────────
     def _place(self):
@@ -120,8 +179,11 @@ class Widget:
     def _press(self, e):
         # x button hit-test (top-right 28px square)
         if e.x >= W - 30 and e.y <= 30:
-            self._save_pos()
-            self.root.destroy()
+            if _HAS_TRAY:
+                self.hide()            # minimize to the tray (quit via tray > Exit)
+            else:
+                self._save_pos()
+                self.root.destroy()
             return
         self._dx, self._dy = e.x, e.y
 
@@ -240,7 +302,9 @@ def main():
     threading.Thread(target=_poller, daemon=True).start()
     root = tk.Tk()
     root.title("AI Usage")
-    Widget(root)
+    w = Widget(root)
+    if _HAS_TRAY:
+        w.setup_tray()
     root.mainloop()
 
 
