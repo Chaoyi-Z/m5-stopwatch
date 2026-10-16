@@ -508,7 +508,7 @@ class ClaudeMonitor:
         If the token has expired (401), re-login to Claude Code to refresh it — the
         bridge reads the token fresh each call, so a new one is picked up automatically.
         """
-        if time.monotonic() - self._usage_ts < 60.0:
+        if time.monotonic() - self._usage_ts < 180.0:
             return self._usage
 
         creds_file = Path.home() / ".claude" / ".credentials.json"
@@ -534,15 +534,26 @@ class ClaudeMonitor:
             if parsed:
                 self._usage    = parsed
                 self._usage_ts = time.monotonic()
+                self._write_usage_cache(parsed)   # share with the desktop widget
                 print(f"[Monitor] Usage: session {parsed['session_pct']}%  "
                       f"weekly {parsed['weekly_all_pct']}%  "
-                      f"sonnet {parsed['weekly_sonnet_pct']}%")
+                      f"scoped {parsed['weekly_scoped_pct']}%")
                 return self._usage
         except Exception as e:
             print(f"[Monitor] Usage fetch failed (token expired? re-login to Claude): {e}")
 
-        self._usage_ts = time.monotonic() - 60.0 + 300.0   # back off 5 min
+        self._usage_ts = time.monotonic() - 180.0 + 300.0   # back off 5 min
         return self._usage
+
+    def _write_usage_cache(self, parsed: dict) -> None:
+        """Persist the latest Claude usage so other local readers (the desktop
+        widget) can display it WITHOUT making their own API calls — a second poller
+        was tripping the endpoint's rate limit (429)."""
+        try:
+            p = Path(__file__).resolve().parent / "usage_state.json"
+            p.write_text(json.dumps({"usage": parsed, "ts": time.time()}))
+        except Exception:
+            pass
 
     def _parse_usage(self, data: dict) -> dict:
         """

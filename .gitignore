@@ -14,6 +14,8 @@ bridge/*.log
 bridge/notify.json
 # Saved on-screen position of the desktop usage widget
 bridge/.usage_widget_pos
+# Claude usage snapshot the bridge writes for the widget to read
+bridge/usage_state.json
 
 # ── Not part of this project ─────────────────────────────────────────────────
 Ref-xiaozhi-esp32-main/

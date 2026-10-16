@@ -10,6 +10,7 @@ Drag the header to move it; click the x to close. Position is remembered.
 """
 import os
 import sys
+import json
 import time
 import threading
 import tkinter as tk
@@ -63,6 +64,22 @@ def _tray_image():
 
 mon = ClaudeMonitor()
 
+USAGE_STATE = Path(__file__).resolve().parent / "usage_state.json"
+
+
+def _read_claude_usage():
+    """Claude usage is read from the bridge's shared file — the bridge is the ONLY
+    process that calls the rate-limited Anthropic API (a 2nd poller here tripped its
+    429 limit). Returns {} if the file is missing or stale (>30 min)."""
+    try:
+        d = json.loads(USAGE_STATE.read_text())
+        if time.time() - float(d.get("ts", 0)) < 1800:
+            return d.get("usage") or {}
+    except Exception:
+        pass
+    return {}
+
+
 # Shared state written by the poller thread, read by the UI.
 state = {
     "claude":  {},      # get_usage_limits()
@@ -83,10 +100,11 @@ def _poller():
         try:
             cs = mon.get_status()
             gs = mon.get_codex_status()
-            upd = {"cstatus": cs, "gstatus": gs, "err": ""}
+            # Claude usage: cheap file read every cycle (bridge is the sole API caller).
+            upd = {"cstatus": cs, "gstatus": gs, "err": "",
+                   "claude": _read_claude_usage()}
             if time.monotonic() - last_usage > 30.0:
-                upd["claude"] = mon.get_usage_limits() or {}
-                upd["gpt"]    = mon.get_codex_usage() or {}
+                upd["gpt"] = mon.get_codex_usage() or {}   # local files, no API
                 try:
                     upd["model"] = mon.get_model() or ""
                 except Exception:
