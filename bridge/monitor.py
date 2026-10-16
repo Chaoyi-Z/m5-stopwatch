@@ -558,12 +558,28 @@ class ClaudeMonitor:
             print(f"[Monitor] Unknown usage shape — keys: {list(data.keys())}")
             return {}
 
+        # Per-model weekly limit now lives in the `limits` array as kind
+        # "weekly_scoped" (seven_day_sonnet is deprecated/None). Its scope names the
+        # model — currently "Fable". Surface it dynamically so the label follows the
+        # plan's scoped model.
+        scoped_pct, scoped_reset, scoped_label = 0, "", ""
+        for lim in (data.get("limits") or []):
+            if lim.get("kind") == "weekly_scoped":
+                scoped_pct   = int(round(lim.get("percent", 0)))
+                scoped_reset = self._fmt_reset(lim.get("resets_at", ""))
+                model        = (lim.get("scope") or {}).get("model") or {}
+                scoped_label = model.get("display_name") or "Scoped"
+                break
+
         return {
             "session_pct":       int(round(five.get("utilization", 0))),
             "session_reset_min": self._mins_until(five.get("resets_at", "")),
             "weekly_all_pct":    int(round(week.get("utilization", 0))),
             "weekly_sonnet_pct": int(round(son.get("utilization", 0))),
             "weekly_reset_str":  self._fmt_reset(week.get("resets_at", "")),
+            "weekly_scoped_pct":   scoped_pct,
+            "weekly_scoped_reset": scoped_reset,
+            "weekly_scoped_label": scoped_label,
         }
 
     @staticmethod

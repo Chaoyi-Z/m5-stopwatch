@@ -12,6 +12,8 @@ __pycache__/
 # ── Runtime files ────────────────────────────────────────────────────────────
 bridge/*.log
 bridge/notify.json
+# Saved on-screen position of the desktop usage widget
+bridge/.usage_widget_pos
 
 # ── Not part of this project ─────────────────────────────────────────────────
 Ref-xiaozhi-esp32-main/
