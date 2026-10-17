@@ -182,17 +182,28 @@ class Widget:
 
     # ── window placement / drag ───────────────────────────────────────────────
     def _place(self):
-        pos = None
+        x = y = None
         try:
             pos = POS_FILE.read_text().strip()
-        except OSError:
+            if "," in pos:
+                x, y = (int(v) for v in pos.split(",")[:2])
+        except Exception:
+            x = y = None
+        if x is None:
+            x = self.root.winfo_screenwidth() - W - 24
+            y = 48
+        # Clamp onto the visible virtual desktop so a saved position never strands
+        # the widget off-screen after a monitor/resolution change.
+        try:
+            import ctypes
+            u = ctypes.windll.user32
+            vx, vy = u.GetSystemMetrics(76), u.GetSystemMetrics(77)   # X/Y virtual
+            vw, vh = u.GetSystemMetrics(78), u.GetSystemMetrics(79)   # CX/CY virtual
+            x = max(vx, min(x, vx + vw - W))
+            y = max(vy, min(y, vy + vh - H))
+        except Exception:
             pass
-        if pos and "," in pos:
-            x, y = pos.split(",")[:2]
-            self.root.geometry(f"{W}x{H}+{x}+{y}")
-        else:
-            sw = self.root.winfo_screenwidth()
-            self.root.geometry(f"{W}x{H}+{sw - W - 24}+{48}")
+        self.root.geometry(f"{W}x{H}+{x}+{y}")
 
     def _press(self, e):
         # x button hit-test (top-right 28px square)
