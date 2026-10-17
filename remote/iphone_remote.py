@@ -12,7 +12,9 @@ Requires: pyserial, pywin32.  Run:  python iphone_remote.py
 """
 import ctypes
 import json
+import os
 import queue
+import subprocess
 import threading
 import time
 import tkinter as tk
@@ -39,6 +41,9 @@ DEFAULTS = {
     "scroll_step": 3,            # wheel units per mouse-wheel notch
     "phone_w": 1206,             # iPhone 16 Pro native resolution (portrait), for letterboxing
     "phone_h": 2622,
+    "start_receiver": True,      # launch UxPlay (AirPlay receiver) with this app
+    "uxplay_exe": "C:/msys64/ucrt64/bin/uxplay.exe",
+    "uxplay_args": ["-n", "iPhone Mirror", "-nh", "-p", "-vs", "d3d11videosink", "-as", "wasapisink"],
 }
 KNOWN_RECEIVERS = ("UxPlay", "AirServer", "LonelyScreen", "Direct3D11 renderer",
                    "Direct3D renderer", "OpenGL renderer", "AirPlay")
@@ -174,8 +179,10 @@ class App:
         self.drag_last = None
         self.drag_acc = [0.0, 0.0]
 
+        self.receiver = None              # UxPlay process we started (stopped on quit)
         self._build_panel()
         self._build_overlay()
+        self._start_receiver()
         self.watch = Watch(lambda *a: self.root.after(0, self._watch_status, *a))
         self.watch.send(f"p {self.cfg['pace_step']} {self.cfg['pace_ms']}")
         self._find_mirror()
@@ -252,6 +259,22 @@ class App:
         else:
             self.lbl_watch.config(text=f"Watch: {port} — Bluetooth off", fg="#a60")
 
+    # ── AirPlay receiver (UxPlay) ────────────────────────────────────────────
+    def _start_receiver(self):
+        exe = self.cfg["uxplay_exe"]
+        if not self.cfg["start_receiver"] or not Path(exe).exists():
+            return
+        running = subprocess.run(["tasklist", "/FI", "IMAGENAME eq uxplay.exe", "/NH"],
+                                 capture_output=True, text=True,
+                                 creationflags=subprocess.CREATE_NO_WINDOW).stdout
+        if "uxplay.exe" in running:
+            return
+        env = dict(os.environ)
+        env["PATH"] = str(Path(exe).parent) + os.pathsep + env.get("PATH", "")   # GStreamer DLLs
+        self.receiver = subprocess.Popen([exe] + self.cfg["uxplay_args"], env=env,
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                         creationflags=subprocess.CREATE_NO_WINDOW)
+
     # ── Mirror window tracking ───────────────────────────────────────────────
     def _find_mirror(self):
         want = self.cfg["mirror_title"]
@@ -323,8 +346,9 @@ class App:
                 self.video = self._video_rect() if visible else None
                 show = self.control_on and visible and focused and self.video is not None
             else:
-                self.lbl_mirror.config(text="Mirror: not found — start the AirPlay receiver, "
-                                            "then Screen Mirroring on the iPhone", fg="#b00")
+                rx = "receiver running" if self.receiver and self.receiver.poll() is None else "start an AirPlay receiver"
+                self.lbl_mirror.config(text=f"Mirror: waiting — {rx}; on the iPhone: "
+                                            "Control Center → Screen Mirroring → iPhone Mirror", fg="#a60")
             if show:
                 x, y, w, h = self.video
                 self.overlay.geometry(f"{w}x{h}+{x}+{y}")
@@ -527,6 +551,8 @@ class App:
     def quit(self):
         self.release_keys()
         self.watch.close()
+        if self.receiver and self.receiver.poll() is None:
+            self.receiver.terminate()
         self.root.destroy()
 
     def run(self):
