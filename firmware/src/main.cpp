@@ -8,6 +8,7 @@
 #include "ui_tokens.h"
 #include "ui_voice.h"
 #include "ui_memo.h"
+#include "ble_hid.h"
 
 // ── Screens ───────────────────────────────────────────────────────────────────
 enum Screen { SCR_STATUS = 0, SCR_TOKENS = 1, SCR_MEMO = 2 };
@@ -218,6 +219,8 @@ void handleMessage(const String& msg) {
         };
         weatherTemp = extractW("temp=").toInt();
         weatherCode = extractW("code=").toInt();
+    } else if (msg.startsWith("HID:")) {
+        hidEnqueue(msg.substring(4));   // iPhone remote command relayed by the bridge
     }
 }
 
@@ -269,6 +272,7 @@ void stopAndSendAudio() {
 // ── Heartbeat ─────────────────────────────────────────────────────────────────
 void sendHeartbeat() {
     battPct = M5.Power.getBatteryLevel();
+    hidSetBattery(battPct);
     ws.sendTXT("CMD:HEARTBEAT:batt=" + String(battPct));
 }
 
@@ -551,6 +555,8 @@ void setup() {
     // Allocate voice memo buffer in PSRAM (15s × 16kHz × 2 bytes = 480KB)
     _memoBuf = (int16_t*)ps_malloc(MEMO_MAX_SAMPLES * sizeof(int16_t));
 
+    hidBegin();   // iPhone remote: listens on USB serial; BLE stays off until "ble 1"
+
     sessionStartMs  = millis();
     _lastActivityMs = millis();
 }
@@ -760,6 +766,12 @@ void loop() {
                     break;
                 }
             }
+        }
+        // iPhone remote indicator under the battery: solid = connected, ring = waiting
+        if (hidEnabled && currentScreen == SCR_STATUS && !(recording || transcribing || lastTranscript.length() > 0)) {
+            uint16_t blue = canvas.color565(60, 140, 255);
+            if (hidConnected) canvas.fillCircle(canvas.width() / 2, 62, 5, blue);
+            else              canvas.drawCircle(canvas.width() / 2, 62, 5, blue);
         }
         // Attention banner overlays any screen after a NOTIFY (permission → Blue=Allow)
         if (notifyActive) {
