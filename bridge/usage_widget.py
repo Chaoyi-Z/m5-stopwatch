@@ -53,13 +53,18 @@ W, H = 340, 276
 POS_FILE = Path(__file__).resolve().parent / ".usage_widget_pos"
 
 def _tray_image():
-    """A tiny 3-bar chart icon for the system tray."""
-    img = Image.new("RGBA", (64, 64), (14, 14, 20, 255))
-    d = ImageDraw.Draw(img)
-    d.rectangle([14, 34, 24, 52], fill=(0, 150, 255, 255))    # blue
-    d.rectangle([28, 22, 38, 52], fill=(175, 120, 255, 255))  # violet
-    d.rectangle([42, 30, 52, 52], fill=(255, 90, 70, 255))    # red
-    return img
+    """Tray icon — reuse the shortcut's .ico so the tray matches the desktop icon.
+    Falls back to a simple drawn 3-bar glyph if the .ico can't be loaded."""
+    try:
+        ico = Path(__file__).resolve().parent / "usage_widget.ico"
+        return Image.open(ico).convert("RGBA").resize((64, 64), Image.LANCZOS)
+    except Exception:
+        img = Image.new("RGBA", (64, 64), (14, 14, 20, 255))
+        d = ImageDraw.Draw(img)
+        d.rectangle([14, 34, 24, 52], fill=(0, 150, 255, 255))    # blue
+        d.rectangle([28, 22, 38, 52], fill=(175, 120, 255, 255))  # violet
+        d.rectangle([42, 30, 52, 52], fill=(255, 90, 70, 255))    # red
+        return img
 
 
 mon = ClaudeMonitor()
