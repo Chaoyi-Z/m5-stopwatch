@@ -139,6 +139,27 @@ class Widget:
         self.icon = None
 
         self.redraw()
+        self._ensure_onscreen()        # keep visible across RDP / monitor changes
+
+    def _ensure_onscreen(self):
+        """Pull the widget back onto the visible desktop and re-assert topmost. The
+        virtual-screen size changes when connecting/disconnecting Remote Desktop (and
+        RDP can drop always-on-top), so this runs continuously, not just at launch."""
+        if not self.hidden:
+            try:
+                import ctypes
+                u = ctypes.windll.user32
+                vx, vy = u.GetSystemMetrics(76), u.GetSystemMetrics(77)
+                vw, vh = u.GetSystemMetrics(78), u.GetSystemMetrics(79)
+                x, y = self.root.winfo_x(), self.root.winfo_y()
+                cx = max(vx, min(x, vx + vw - W))
+                cy = max(vy, min(y, vy + vh - H))
+                if (cx, cy) != (x, y):
+                    self.root.geometry(f"+{cx}+{cy}")
+                self.root.attributes("-topmost", True)   # RDP reconnect can drop this
+            except Exception:
+                pass
+        self.root.after(2000, self._ensure_onscreen)
 
     # ── tray / show / hide ────────────────────────────────────────────────────
     def setup_tray(self):
