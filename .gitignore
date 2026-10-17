@@ -22,3 +22,6 @@ Ref-xiaozhi-esp32-main/
 .claude/
 build.log
 Workstation-BIOS-RAM-Fix-Guide.md
+
+# iPhone remote: per-machine calibration
+remote/remote_config.json
